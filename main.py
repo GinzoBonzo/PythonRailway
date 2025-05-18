@@ -11,6 +11,8 @@ from chromadb.config import Settings
 import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from flask import Flask, request, jsonify
+import asyncio
 
 # Set up logging
 logging.basicConfig(
@@ -28,6 +30,48 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 BOT_USERNAME = os.getenv("BOT_USERNAME")  # Your bot's username including the '@'
 MAX_PROMPT_WORDS = 750
 SHORT_TERM_DAYS = 2
+
+# Initialize Flask app
+app = Flask(__name__)
+
+# Initialize bot application
+bot_application = None
+
+def init_bot():
+    """Initialize the Telegram bot application."""
+    global bot_application
+    if bot_application is None:
+        bot_application = Application.builder().token(TELEGRAM_TOKEN).build()
+        
+        # Add handlers
+        bot_application.add_handler(CommandHandler("start", start))
+        bot_application.add_handler(CommandHandler("help", help_command))
+        bot_application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        # Start the bot in a separate thread
+        import threading
+        bot_thread = threading.Thread(target=bot_application.run_polling)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+# Initialize bot when the Flask app starts
+@app.before_first_request
+def before_first_request():
+    init_bot()
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint."""
+    return jsonify({"status": "healthy"}), 200
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Webhook endpoint for Telegram updates."""
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(), bot_application.bot)
+        asyncio.run(handle_message(update, None))
+        return jsonify({"status": "ok"}), 200
+    return jsonify({"status": "error"}), 400
 
 # ChromaDB setup
 def setup_chroma():
@@ -278,19 +322,3 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             bot_message_data["user_id"], 
             bot_message_data["timestamp"]
         )
-
-def main() -> None:
-    """Start the bot."""
-    # Create the Application
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # Start the Bot
-    application.run_polling()
-
-if __name__ == "__main__":
-    main()
